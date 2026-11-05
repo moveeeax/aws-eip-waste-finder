@@ -1,27 +1,31 @@
 # aws-eip-waste-finder
 
 [![ci](https://github.com/moveeeax/aws-eip-waste-finder/actions/workflows/ci.yml/badge.svg)](https://github.com/moveeeax/aws-eip-waste-finder/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Find allocated Elastic IPs that are **billing while doing nothing**, and total the monthly dollar waste.
 
-An Elastic IP is free while it's attached to a *running* instance. The moment that instance stops or is terminated, the EIP keeps billing at ~$0.005/hr (~$3.65/mo) for a public IP nobody is using. They pile up from torn-down stacks, failed NAT setups, and forgotten test boxes — each one a rounding error until there are dozens across regions.
+Since 2024-02-01 AWS bills **every** public IPv4 address at $0.005/hr (~$3.65/mo), Elastic IPs included — whether the EIP is attached to a running instance or sitting idle ([VPC pricing](https://aws.amazon.com/vpc/pricing/), [announcement](https://aws.amazon.com/blogs/aws/new-aws-public-ipv4-address-charge-public-ip-insights/)). An attached EIP at least earns its keep. Once its instance stops or is terminated, or it was never attached, you keep paying the same rate for a public IP nobody is using. They pile up from torn-down stacks, failed NAT setups, and forgotten test boxes — each one a rounding error until there are dozens across regions.
 
 ## How it works
 
 1. `DescribeAddresses` lists every allocated Elastic IP in the region.
 2. Each address is classified:
    - **`UNATTACHED`** — no `AssociationId` at all → billing, pure waste.
-   - **`ATTACHED_TO_STOPPED`** — associated with an instance that is not `running` → billing.
-   - **`ACTIVE`** — attached to a running instance (or a non-instance target such as a NAT gateway / ENI) → not waste.
+   - **`ATTACHED_TO_STOPPED`** — associated with an instance that is not `running` → billing, waste.
+   - **`ACTIVE`** — attached to a running instance (or a non-instance target such as a NAT gateway / ENI) → still billing, but in use, so not waste.
 3. For instance-backed EIPs it batches a `DescribeInstances` to check the real power state.
-4. Idle EIPs are priced from a static per-region table (`$0.005/hr × 730 hr`) and summed.
+4. Every EIP is priced at the public IPv4 rate (`$0.005/hr × 730 hr`). The report shows both the total monthly charge and the waste (the charge of idle EIPs only).
 5. It prints a table (or `--json`) and **exits `1` when idle EIPs are found**, so it doubles as a CI gate.
 
 Tests run entirely offline against an injected client interface — no live AWS calls.
 
+Prices are list prices. Free Tier hours and BYOIP addresses (which AWS does not charge) are not taken into account.
+
 ## Install
+
+Requires Go 1.26 or newer.
 
 ```sh
 go install github.com/moveeeax/aws-eip-waste-finder/cmd/aws-eip-waste-finder@latest
@@ -51,12 +55,12 @@ Credentials come from the standard AWS chain (env vars, shared config, SSO, inst
 
 ```sh
 $ aws-eip-waste-finder --region eu-central-1
-STATE                PUBLIC_IP     ALLOCATION_ID                  INSTANCE             MONTHLY_$
-UNATTACHED           52.29.0.14    eipalloc-0a1b2c3d4e5f60011     -                    3.65
-ATTACHED_TO_STOPPED  3.120.44.7    eipalloc-0a1b2c3d4e5f60022     i-0abcd1234ef567890  3.65
-ACTIVE               18.196.7.201  eipalloc-0a1b2c3d4e5f60033     i-0999aaaa8888bbbb7  0.00
+STATE                PUBLIC_IP     ALLOCATION_ID               INSTANCE             COST_$/MO  WASTE_$/MO
+UNATTACHED           52.29.0.14    eipalloc-0a1b2c3d4e5f60011  -                    3.65       3.65
+ATTACHED_TO_STOPPED  3.120.44.7    eipalloc-0a1b2c3d4e5f60022  i-0abcd1234ef567890  3.65       3.65
+ACTIVE               18.196.7.201  eipalloc-0a1b2c3d4e5f60033  i-0999aaaa8888bbbb7  3.65       0.00
 
-3 allocated, 2 idle — estimated waste $7.30/mo (region eu-central-1 @ $0.0050/hr)
+3 allocated, 2 idle — estimated waste $7.30/mo of $10.95/mo billed (region eu-central-1 @ $0.0050/hr per public IPv4)
 ```
 
 ### JSON output

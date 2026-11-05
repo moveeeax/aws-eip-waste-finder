@@ -85,9 +85,13 @@ func TestClassify(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classify(tt.a, tt.run, MonthlyWaste("eu-central-1"))
+			got := classify(tt.a, tt.run, MonthlyCost("eu-central-1"))
 			if got.State != tt.want {
 				t.Fatalf("state = %s, want %s", got.State, tt.want)
+			}
+			// Every allocated EIP bills the public IPv4 rate, active or idle.
+			if got.MonthlyCost != MonthlyCost("eu-central-1") {
+				t.Fatalf("cost = %.4f, want %.4f", got.MonthlyCost, MonthlyCost("eu-central-1"))
 			}
 			wantWaste := 0.0
 			if tt.want.idle() {
@@ -123,6 +127,11 @@ func TestScanTotalsAndOrdering(t *testing.T) {
 	if rep.TotalMonthly != want {
 		t.Fatalf("total = %.4f, want %.4f", rep.TotalMonthly, want)
 	}
+	// All three allocated EIPs bill, including the active one.
+	wantCost := 3 * MonthlyCost("eu-central-1")
+	if rep.TotalMonthlyCost != wantCost {
+		t.Fatalf("total cost = %.4f, want %.4f", rep.TotalMonthlyCost, wantCost)
+	}
 	// Idle entries must sort before active ones.
 	if !rep.Addresses[0].Idle() || !rep.Addresses[1].Idle() {
 		t.Fatalf("idle addresses should sort first: %+v", rep.Addresses)
@@ -136,12 +145,17 @@ func TestScanTotalsAndOrdering(t *testing.T) {
 	}
 }
 
-func TestPricingOverride(t *testing.T) {
-	if got := HourlyPrice("eu-central-1"); got != defaultHourlyUSD {
-		t.Fatalf("default price = %.4f, want %.4f", got, defaultHourlyUSD)
-	}
-	if got := MonthlyWaste("eu-central-1"); got != defaultHourlyUSD*hoursPerMonth {
-		t.Fatalf("monthly = %.4f", got)
+func TestPricing(t *testing.T) {
+	for _, region := range []string{"eu-central-1", "us-east-1", "us-gov-west-1"} {
+		if got := HourlyPrice(region); got != defaultHourlyUSD {
+			t.Fatalf("%s price = %.4f, want %.4f", region, got, defaultHourlyUSD)
+		}
+		if got := MonthlyCost(region); got != defaultHourlyUSD*hoursPerMonth {
+			t.Fatalf("%s monthly cost = %.4f", region, got)
+		}
+		if MonthlyWaste(region) != MonthlyCost(region) {
+			t.Fatalf("%s: idle waste should equal the full monthly cost", region)
+		}
 	}
 }
 
@@ -159,7 +173,7 @@ func TestReportJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &back); err != nil {
 		t.Fatalf("json invalid: %v", err)
 	}
-	if back.IdleCount != 1 || back.Region != "us-east-1" {
+	if back.IdleCount != 1 || back.Region != "us-east-1" || back.TotalMonthlyCost != MonthlyCost("us-east-1") {
 		t.Fatalf("round trip lost data: %+v", back)
 	}
 }

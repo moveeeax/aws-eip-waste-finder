@@ -5,6 +5,7 @@
       "allocation_id": "eipalloc-0a1b2c3d4e5f60011",
       "public_ip": "52.29.0.14",
       "state": "UNATTACHED",
+      "monthly_cost_usd": 3.65,
       "monthly_waste_usd": 3.65
     },
     {
@@ -12,6 +13,7 @@
       "public_ip": "3.120.44.7",
       "instance_id": "i-0abcd1234ef567890",
       "state": "ATTACHED_TO_STOPPED",
+      "monthly_cost_usd": 3.65,
       "monthly_waste_usd": 3.65
     },
     {
@@ -19,10 +21,12 @@
       "public_ip": "18.196.7.201",
       "instance_id": "i-0999aaaa8888bbbb7",
       "state": "ACTIVE",
+      "monthly_cost_usd": 3.65,
       "monthly_waste_usd": 0
     }
   ],
   "idle_count": 2,
   "total_monthly_waste_usd": 7.3,
+  "total_monthly_cost_usd": 10.95,
   "hourly_price_usd": 0.005
 }
