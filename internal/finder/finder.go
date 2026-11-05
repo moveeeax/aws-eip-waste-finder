@@ -16,7 +16,9 @@ import (
 type State string
 
 const (
-	// StateActive means the EIP is associated with a running instance — not waste.
+	// StateActive means the EIP is associated with a running instance or a
+	// non-instance target. It still bills at the public IPv4 rate, but it is
+	// doing its job, so it is not counted as waste.
 	StateActive State = "ACTIVE"
 	// StateUnattached means the EIP has no association at all — pure waste.
 	StateUnattached State = "UNATTACHED"
@@ -30,32 +32,35 @@ func (s State) idle() bool {
 	return s == StateUnattached || s == StateAttachedToStopped
 }
 
-// Default EIP idle price: AWS bills an unassociated/idle Elastic IP at
-// $0.005 per hour in most commercial regions.
+// defaultHourlyUSD is the AWS public IPv4 address charge, in effect since
+// 2024-02-01. It applies to every allocated Elastic IP, whether idle or in use
+// (attached to a running instance, NAT gateway, ENI, ...). BYOIP addresses are
+// not charged. Source: https://aws.amazon.com/vpc/pricing/ ("Public IPv4
+// Address" tab), which lists the same rate for in-use and idle addresses
+// across commercial, GovCloud and China regions.
 const defaultHourlyUSD = 0.005
 
 // hoursPerMonth is the AWS billing convention (730 hours/month).
 const hoursPerMonth = 730.0
 
-// regionHourly overrides the default idle price for regions that differ.
-// Values are USD/hour for an idle (unassociated) Elastic IP.
-var regionHourly = map[string]float64{
-	// GovCloud and a few others historically priced idle EIPs slightly higher.
-	"us-gov-west-1": 0.005,
-	"us-gov-east-1": 0.005,
-}
-
-// HourlyPrice returns the idle-EIP hourly USD price for a region.
+// HourlyPrice returns the hourly USD price of one allocated Elastic IP in a
+// region. AWS publishes a single rate for all regions, so region is currently
+// unused; it is kept so per-region prices can be added without an API change.
 func HourlyPrice(region string) float64 {
-	if p, ok := regionHourly[region]; ok {
-		return p
-	}
+	_ = region
 	return defaultHourlyUSD
 }
 
-// MonthlyWaste returns the estimated monthly USD waste for one idle EIP in a region.
-func MonthlyWaste(region string) float64 {
+// MonthlyCost returns the estimated monthly USD charge for one allocated
+// Elastic IP in a region. Every allocated EIP is billed, idle or not.
+func MonthlyCost(region string) float64 {
 	return HourlyPrice(region) * hoursPerMonth
+}
+
+// MonthlyWaste returns the estimated monthly USD waste for one idle EIP in a
+// region. It equals MonthlyCost: an idle EIP's whole charge is waste.
+func MonthlyWaste(region string) float64 {
+	return MonthlyCost(region)
 }
 
 // Address is the finder's normalized view of one allocated Elastic IP.
@@ -64,6 +69,7 @@ type Address struct {
 	PublicIP     string  `json:"public_ip"`
 	InstanceID   string  `json:"instance_id,omitempty"`
 	State        State   `json:"state"`
+	MonthlyCost  float64 `json:"monthly_cost_usd"`
 	MonthlyWaste float64 `json:"monthly_waste_usd"`
 }
 
@@ -79,15 +85,17 @@ type EC2API interface {
 
 // Report is the full scan result for a region.
 type Report struct {
-	Region         string    `json:"region"`
-	Addresses      []Address `json:"addresses"`
-	IdleCount      int       `json:"idle_count"`
-	TotalMonthly   float64   `json:"total_monthly_waste_usd"`
-	HourlyPriceUSD float64   `json:"hourly_price_usd"`
+	Region           string    `json:"region"`
+	Addresses        []Address `json:"addresses"`
+	IdleCount        int       `json:"idle_count"`
+	TotalMonthly     float64   `json:"total_monthly_waste_usd"`
+	TotalMonthlyCost float64   `json:"total_monthly_cost_usd"`
+	HourlyPriceUSD   float64   `json:"hourly_price_usd"`
 }
 
 // Scan enumerates every allocated Elastic IP in the region, classifies each,
-// and totals the monthly waste of the idle ones.
+// and totals both the monthly charge of all of them and the monthly waste of
+// the idle ones.
 func Scan(ctx context.Context, client EC2API, region string) (*Report, error) {
 	out, err := client.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{})
 	if err != nil {
@@ -100,11 +108,12 @@ func Scan(ctx context.Context, client EC2API, region string) (*Report, error) {
 	}
 
 	rep := &Report{Region: region, HourlyPriceUSD: HourlyPrice(region)}
-	perIdle := MonthlyWaste(region)
+	perAddr := MonthlyCost(region)
 
 	for _, a := range out.Addresses {
-		addr := classify(a, running, perIdle)
+		addr := classify(a, running, perAddr)
 		rep.Addresses = append(rep.Addresses, addr)
+		rep.TotalMonthlyCost += addr.MonthlyCost
 		if addr.Idle() {
 			rep.IdleCount++
 			rep.TotalMonthly += addr.MonthlyWaste
@@ -154,11 +163,14 @@ func runningInstances(ctx context.Context, client EC2API, addrs []ec2types.Addre
 }
 
 // classify turns a raw EC2 address into a normalized, priced Address.
-func classify(a ec2types.Address, running map[string]bool, perIdleMonthly float64) Address {
+// perMonthly is the monthly charge of one allocated EIP: every address carries
+// it as MonthlyCost, and idle ones also carry it as MonthlyWaste.
+func classify(a ec2types.Address, running map[string]bool, perMonthly float64) Address {
 	addr := Address{
 		AllocationID: aws.ToString(a.AllocationId),
 		PublicIP:     aws.ToString(a.PublicIp),
 		InstanceID:   aws.ToString(a.InstanceId),
+		MonthlyCost:  perMonthly,
 	}
 	switch {
 	case aws.ToString(a.AssociationId) == "":
@@ -175,7 +187,7 @@ func classify(a ec2types.Address, running map[string]bool, perIdleMonthly float6
 		addr.State = StateActive
 	}
 	if addr.State.idle() {
-		addr.MonthlyWaste = perIdleMonthly
+		addr.MonthlyWaste = perMonthly
 	}
 	return addr
 }
