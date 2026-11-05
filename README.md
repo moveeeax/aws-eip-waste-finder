@@ -82,3 +82,7 @@ See [`examples/sample-report.json`](examples/sample-report.json) for the shape.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+**Archived on 2026-11-05.** merge into aws-orphan-finder: it already scans unattached EIPs multi-region with pricing; this repo's only extra is the ATTACHED_TO_STOPPED state. Also its core premise is outdated: since 2024-02-01 every public IPv4 bills $0.005/h, attached or not, so "ACTIVE = $0" is wrong. The scope moves to [aws-orphan-finder](https://github.com/moveeeax/aws-orphan-finder/issues/6).
